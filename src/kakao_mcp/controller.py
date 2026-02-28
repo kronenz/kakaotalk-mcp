@@ -1,5 +1,6 @@
 """Win32 API wrapper for KakaoTalk PC automation."""
 import os
+import sys
 import time
 import ctypes
 import shutil
@@ -12,6 +13,11 @@ import win32clipboard
 import win32process
 
 from . import config
+
+
+def _log(msg: str):
+    """Write debug message to stderr (visible in MCP server logs)."""
+    print(f"[kakao-controller] {msg}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +190,8 @@ def _read_clipboard_text(max_retries: int = None, interval_sec: float = None) ->
 def send_message_to_room(room_name: str, text: str) -> Dict:
     """Send a text message to a KakaoTalk chat room.
 
-    Uses WM_SETTEXT on RICHEDIT50W followed by VK_RETURN.
-    The chat window must already be open.
+    Pastes text via clipboard into RICHEDIT50W and sends with keybd_event Enter.
+    NOTE: This briefly brings the chat window to the foreground.
 
     Returns:
         Dict with success (bool) and message or error.
@@ -198,13 +204,34 @@ def send_message_to_room(room_name: str, text: str) -> Dict:
     if edit_hwnd is None:
         return {"success": False, "error": f"Edit control not found in '{room_name}'"}
 
-    # Set text — SendMessageW handles Unicode (Korean) correctly
-    win32api.SendMessage(edit_hwnd, config.WM_SETTEXT, 0, text)
-    time.sleep(0.05)
+    # Bring window to foreground and focus the edit control
+    bring_window_to_front(hwnd)
+    time.sleep(0.2)
 
-    # Press Enter to send
-    win32api.SendMessage(edit_hwnd, config.WM_KEYDOWN, config.VK_RETURN, 0)
-    win32api.SendMessage(edit_hwnd, config.WM_KEYUP, config.VK_RETURN, 0)
+    # Click on the edit control to ensure focus
+    try:
+        rect = win32gui.GetWindowRect(edit_hwnd)
+        cx = (rect[0] + rect[2]) // 2
+        cy = (rect[1] + rect[3]) // 2
+        _user32.SetCursorPos(cx, cy)
+        _user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+        _user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+        time.sleep(0.1)
+    except Exception:
+        pass
+
+    # Paste text via clipboard (handles Korean correctly, unlike WM_SETTEXT on some versions)
+    win32clipboard.OpenClipboard()
+    win32clipboard.EmptyClipboard()
+    win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+    win32clipboard.CloseClipboard()
+    time.sleep(0.05)
+    _send_ctrl_key_combo(0x56)  # Ctrl+V
+    time.sleep(0.1)
+
+    # Press Enter using keybd_event (not WM_KEYDOWN — WM_KEYDOWN inserts newline in RICHEDIT)
+    _user32.keybd_event(config.VK_RETURN, 0, 0, 0)
+    _user32.keybd_event(config.VK_RETURN, 0, config.KEYEVENTF_KEYUP, 0)
 
     return {"success": True, "message": f"Message sent to '{room_name}'"}
 
@@ -267,10 +294,95 @@ def read_chat_messages(room_name: str) -> Dict:
 # Room search/open
 # ---------------------------------------------------------------------------
 
+def _find_chat_list_view(main_hwnd: int) -> Optional[int]:
+    """Find the ChatRoomListView window inside the main window."""
+    chat_list_view = None
+
+    def _find_view(hwnd, _):
+        nonlocal chat_list_view
+        cls = win32gui.GetClassName(hwnd)
+        text = win32gui.GetWindowText(hwnd)
+        if cls == "EVA_Window" and "ChatRoomListView" in text:
+            chat_list_view = hwnd
+            return False
+        return True
+
+    try:
+        win32gui.EnumChildWindows(main_hwnd, _find_view, None)
+    except Exception:
+        pass
+    return chat_list_view
+
+
+def _find_search_strip(chat_list_view: int) -> Optional[int]:
+    """Find the search strip (EVA_Window_Dblclk, ~390x40) inside ChatRoomListView.
+
+    This strip contains the magnifying glass icon. Clicking it activates the search
+    Edit control (which starts out hidden/invisible).
+    """
+    result = None
+
+    def _cb(hwnd, _):
+        nonlocal result
+        if win32gui.GetParent(hwnd) != chat_list_view:
+            return True
+        cls = win32gui.GetClassName(hwnd)
+        if cls == "EVA_Window_Dblclk":
+            try:
+                r = win32gui.GetWindowRect(hwnd)
+                w, h = r[2] - r[0], r[3] - r[1]
+                if w > 200 and 25 < h < 60:
+                    result = hwnd
+                    return False
+            except Exception:
+                pass
+        return True
+
+    try:
+        win32gui.EnumChildWindows(chat_list_view, _cb, None)
+    except Exception:
+        pass
+    return result
+
+
+def _activate_search_and_get_edit(main_hwnd: int) -> Optional[int]:
+    """Activate the chat search bar using Ctrl+F and return the Edit hwnd.
+
+    KakaoTalk PC uses Ctrl+F to open the search bar in the chat list view.
+    After Ctrl+F, the Edit control becomes visible and focused.
+    """
+    chat_list_view = _find_chat_list_view(main_hwnd)
+    _log(f"ChatRoomListView hwnd: {chat_list_view}")
+    if chat_list_view is None:
+        return None
+
+    # Press Ctrl+F to activate search
+    _send_ctrl_key_combo(0x46)  # 0x46 = 'F'
+    time.sleep(0.5)
+
+    # Find the Edit control — should now be visible and focused
+    edit_hwnd = find_child_window_recursive(chat_list_view, "Edit")
+    if edit_hwnd:
+        vis = win32gui.IsWindowVisible(edit_hwnd)
+        _log(f"Edit hwnd after Ctrl+F: {edit_hwnd}, visible: {vis}")
+    else:
+        _log("Edit not found after Ctrl+F")
+    return edit_hwnd
+
+
+def _ensure_foreground(hwnd: int) -> bool:
+    """Ensure a window is in the foreground. Returns True if successful."""
+    bring_window_to_front(hwnd)
+    time.sleep(0.2)
+    fg = _user32.GetForegroundWindow()
+    return fg == hwnd
+
+
 def search_and_open_room(room_name: str) -> Dict:
     """Search for a chat room in KakaoTalk main window and open it.
 
-    Uses the search box (Ctrl+F equivalent) in the main window.
+    Uses clipboard paste into the search Edit box (for Korean IME support),
+    then double-clicks the first search result in SearchListCtrl.
 
     Returns:
         Dict with success (bool) and message or error.
@@ -281,38 +393,91 @@ def search_and_open_room(room_name: str) -> Dict:
     if main_hwnd == 0:
         return {"success": False, "error": "KakaoTalk main window not found"}
 
-    bring_window_to_front(main_hwnd)
-    time.sleep(0.3)
+    # Ensure KakaoTalk is in the foreground before sending keyboard events
+    if not _ensure_foreground(main_hwnd):
+        _log("Warning: Could not bring KakaoTalk to foreground")
 
-    # Find the search edit control in the main window
-    edit_hwnd = find_child_window_recursive(main_hwnd, config.KAKAO_EDIT_CLASS)
+    # Ctrl+F activates the search bar (Edit becomes visible and focused)
+    edit_hwnd = _activate_search_and_get_edit(main_hwnd)
     if edit_hwnd is None:
         return {"success": False, "error": "Search box not found in KakaoTalk main window"}
 
-    # Clear and type room name
-    win32api.SendMessage(edit_hwnd, config.WM_SETTEXT, 0, room_name)
-    time.sleep(0.5)
+    # Clear any existing text in the Edit using EM_SETSEL + WM_CLEAR
+    EM_SETSEL = 0x00B1
+    WM_CLEAR = 0x0303
+    win32api.SendMessage(edit_hwnd, EM_SETSEL, 0, -1)  # Select all
+    win32api.SendMessage(edit_hwnd, WM_CLEAR, 0, 0)     # Delete selected
+    time.sleep(0.1)
 
-    # Press Enter to open first search result
-    win32api.SendMessage(edit_hwnd, config.WM_KEYDOWN, config.VK_RETURN, 0)
-    win32api.SendMessage(edit_hwnd, config.WM_KEYUP, config.VK_RETURN, 0)
-    time.sleep(0.5)
+    # Type search text character by character using WM_CHAR
+    # This goes directly to the Edit control — no focus or clipboard needed
+    for ch in room_name:
+        win32api.SendMessage(edit_hwnd, config.WM_CHAR, ord(ch), 0)
+        time.sleep(0.02)
+    _log(f"Typed '{room_name}' into Edit via WM_CHAR")
+    time.sleep(1.5)  # Wait for search results to populate
 
-    # Clear search box with Escape
-    win32api.SendMessage(edit_hwnd, config.WM_KEYDOWN, config.VK_ESCAPE, 0)
-    win32api.SendMessage(edit_hwnd, config.WM_KEYUP, config.VK_ESCAPE, 0)
-
-    # Verify the chat window opened
+    # Navigate to the first search result with Down arrow, then Enter to open
+    _log("Pressing Down arrow to select first search result, then Enter")
+    VK_DOWN = 0x28
+    _user32.keybd_event(VK_DOWN, 0, 0, 0)
+    _user32.keybd_event(VK_DOWN, 0, config.KEYEVENTF_KEYUP, 0)
     time.sleep(0.3)
-    new_hwnd = find_chat_window(room_name)
-    if new_hwnd:
-        return {"success": True, "message": f"Opened chat room '{room_name}'", "hwnd": new_hwnd}
-    else:
+    _user32.keybd_event(config.VK_RETURN, 0, 0, 0)
+    _user32.keybd_event(config.VK_RETURN, 0, config.KEYEVENTF_KEYUP, 0)
+    time.sleep(1.0)
+
+    # Do NOT press Escape here — it would close the newly opened chat window
+
+    # Look for opened chat windows
+    all_windows = list_chat_windows()
+    _log(f"Open windows after search: {[w['title'] for w in all_windows]}")
+    for w in all_windows:
+        if w["title"] == room_name:
+            return {"success": True, "message": f"Opened chat room '{room_name}'", "hwnd": w["hwnd"]}
+    for w in all_windows:
+        if room_name in w["title"]:
+            return {
+                "success": True,
+                "message": f"Opened chat room '{w['title']}' (searched: '{room_name}')",
+                "hwnd": w["hwnd"],
+            }
+    if all_windows:
         return {
-            "success": False,
-            "error": f"Chat room '{room_name}' not found after search. "
-                     "The exact room name may differ from search results.",
+            "success": True,
+            "message": f"Opened a chat window (title: '{all_windows[0]['title']}')",
+            "hwnd": all_windows[0]["hwnd"],
         }
+
+    return {
+        "success": False,
+        "error": f"Chat room '{room_name}' not found after search. "
+                 "The exact room name may differ from search results.",
+    }
+
+
+def _find_visible_search_list(main_hwnd: int) -> Optional[int]:
+    """Find the visible SearchListCtrl in the main window."""
+    result = None
+
+    def _cb(hwnd, _):
+        nonlocal result
+        cls = win32gui.GetClassName(hwnd)
+        text = win32gui.GetWindowText(hwnd)
+        if cls == "EVA_VH_ListControl_Dblclk" and "SearchListCtrl" in text:
+            r = win32gui.GetWindowRect(hwnd)
+            w = r[2] - r[0]
+            h = r[3] - r[1]
+            if w > 100 and h > 100:
+                result = hwnd
+                return False
+        return True
+
+    try:
+        win32gui.EnumChildWindows(main_hwnd, _cb, None)
+    except Exception:
+        pass
+    return result
 
 
 # ---------------------------------------------------------------------------
