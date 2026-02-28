@@ -101,9 +101,38 @@ def find_child_window_recursive(parent_hwnd: int, class_name: str) -> Optional[i
 
 
 def bring_window_to_front(hwnd: int):
-    """Restore and bring a window to the foreground."""
-    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-    win32gui.SetForegroundWindow(hwnd)
+    """Restore and bring a window to the foreground.
+
+    Uses ctypes directly (not pywin32) to avoid exceptions on failure,
+    and simulates Alt keypress to bypass Windows foreground restrictions.
+    """
+    VK_MENU = 0x12  # Alt key
+    SW_SHOW = 5
+    SW_RESTORE = 9
+    HWND_TOPMOST = -1
+    HWND_NOTOPMOST = -2
+    SWP_NOMOVE = 0x0002
+    SWP_NOSIZE = 0x0001
+    SWP_SHOWWINDOW = 0x0040
+
+    _user32.ShowWindow(hwnd, SW_RESTORE)
+
+    # Simulate Alt keypress to unlock SetForegroundWindow
+    _user32.keybd_event(VK_MENU, 0, 0, 0)
+    _user32.keybd_event(VK_MENU, 0, config.KEYEVENTF_KEYUP, 0)
+
+    # Use ctypes SetForegroundWindow (returns 0 on fail, no exception)
+    _user32.SetForegroundWindow(hwnd)
+
+    # Also temporarily set topmost to ensure visibility
+    _user32.SetWindowPos(
+        hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    )
+    _user32.SetWindowPos(
+        hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    )
 
 
 # ---------------------------------------------------------------------------
