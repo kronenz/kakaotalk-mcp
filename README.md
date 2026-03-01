@@ -20,6 +20,9 @@ Claude Desktop, Claude Code 등 MCP 클라이언트에서 카카오톡 메시지
 | `kakao_read_messages` | 채팅방 메시지 읽기 |
 | `kakao_extract_links` | 채팅방에서 공유된 URL 추출 |
 | `kakao_download_images` | 카카오톡 캐시에서 최근 이미지 다운로드 |
+| `kakao_start_monitor` | 채팅방 키워드 모니터링 시작 |
+| `kakao_stop_monitor` | 모니터링 중지 |
+| `kakao_get_monitor_events` | 감지된 키워드 이벤트 조회 |
 
 ## 요구사항
 
@@ -131,6 +134,8 @@ Claude에게 자연어로 요청하면 됩니다:
 - "홍길동 채팅방 최근 대화 읽어줘"
 - "홍길동 채팅방에서 공유된 링크 추출해줘"
 - "최근 카카오톡 이미지 다운로드해줘"
+- "공학자들 채팅방에서 '회의', '점심' 키워드를 모니터링하고 감지되면 답장해줘"
+- "모니터링 중지해줘"
 
 ## 제한사항 및 주의사항
 
@@ -140,6 +145,7 @@ Claude에게 자연어로 요청하면 됩니다:
 - **클립보드 사용**: 메시지 읽기/전송 시 시스템 클립보드를 사용합니다. 작업 중 클립보드 내용이 변경될 수 있습니다.
 - **채팅방 이름 정확히 입력**: `kakao_send_message`, `kakao_read_messages`는 채팅방 창 제목이 정확히 일치해야 합니다. 먼저 `kakao_list_open_rooms`로 정확한 이름을 확인하세요.
 - **이미지 다운로드**: 카카오톡 로컬 캐시에서 가져오며, 채팅방별 구분 없이 최근 캐시된 이미지가 다운로드됩니다.
+- **모니터링 기능**: `kakao_start_monitor`는 백그라운드에서 채팅방을 주기적으로 폴링합니다. 폴링 시마다 카카오톡 창이 잠시 최전면으로 올라오며, 최소 폴링 간격은 3초입니다.
 
 ## 프로젝트 구조
 
@@ -153,7 +159,7 @@ kakaotalk-mcp/
 │   └── kakao_mcp/
 │       ├── __init__.py
 │       ├── __main__.py      # python -m kakao_mcp 지원
-│       ├── server.py        # MCP 서버 + 8개 도구 정의
+│       ├── server.py        # MCP 서버 + 11개 도구 정의
 │       ├── controller.py    # Win32 API 래퍼
 │       ├── parser.py        # 클립보드 텍스트 파싱
 │       └── config.py        # 상수 및 설정

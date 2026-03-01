@@ -192,6 +192,68 @@ def kakao_download_images(
         return {"error": f"Failed to download images: {e}"}
 
 
+@app.tool()
+def kakao_start_monitor(
+    room_name: str,
+    keywords: list[str],
+    poll_interval_sec: float = 5.0,
+) -> Dict:
+    """Start monitoring a KakaoTalk chat room for keyword matches.
+    Runs in background, checking for new messages at the specified interval.
+    Use kakao_get_monitor_events() to retrieve detected keyword matches.
+    NOTE: The chat room window must be open. Polling brings it to foreground briefly.
+
+    Args:
+        room_name: Exact title of the chat room window to monitor.
+        keywords: List of keywords to watch for (case-insensitive).
+        poll_interval_sec: Seconds between each poll (minimum 3, default 5).
+    """
+    try:
+        if not keywords:
+            return {"error": "Keywords list cannot be empty"}
+        result = controller._chat_monitor.start(room_name, keywords, poll_interval_sec)
+        if result["success"]:
+            return {"message": result["message"]}
+        return {"error": result["error"]}
+    except Exception as e:
+        return {"error": f"Failed to start monitor: {e}"}
+
+
+@app.tool()
+def kakao_stop_monitor() -> Dict:
+    """Stop the running chat room monitor."""
+    try:
+        result = controller._chat_monitor.stop()
+        if result["success"]:
+            return {"message": result["message"]}
+        return {"error": result["error"]}
+    except Exception as e:
+        return {"error": f"Failed to stop monitor: {e}"}
+
+
+@app.tool()
+def kakao_get_monitor_events() -> Dict:
+    """Get pending keyword match events from the chat monitor.
+    Returns events detected since last call. Each event includes:
+    - keyword: the matched keyword
+    - trigger_message: the message that matched (sender, time, text)
+    - recent_context: last 10 messages for context understanding
+    - room_name: the monitored chat room
+
+    Call this periodically while monitor is running to check for matches.
+    """
+    try:
+        is_running = controller._chat_monitor.is_running
+        events = controller._chat_monitor.get_events()
+        return {
+            "monitoring": is_running,
+            "event_count": len(events),
+            "events": events,
+        }
+    except Exception as e:
+        return {"error": f"Failed to get monitor events: {e}"}
+
+
 def main():
     app.run(transport="stdio")
 

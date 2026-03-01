@@ -4,6 +4,9 @@ import sys
 import time
 import ctypes
 import shutil
+import hashlib
+import threading
+from collections import deque
 from typing import Optional, List, Dict
 
 import win32gui
@@ -762,3 +765,139 @@ def send_mention_message(room_name: str, mention_name: str, message: str) -> Dic
         "success": True,
         "message": f"Mention message sent to @{mention_name} in '{room_name}'",
     }
+
+
+# ---------------------------------------------------------------------------
+# Chat room monitoring (background thread)
+# ---------------------------------------------------------------------------
+
+class ChatMonitor:
+    """Background chat room monitor with keyword detection.
+
+    Polls a single chat room at a configurable interval, detects new messages
+    via hash-based diffing, and queues events when keywords are matched.
+    """
+
+    def __init__(self):
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._events: deque = deque(maxlen=100)
+        self._seen_hashes: set = set()
+        self._room_name: str = ""
+        self._keywords: List[str] = []
+        self._poll_interval: float = 5.0
+        self._running: bool = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._running and self._thread is not None and self._thread.is_alive()
+
+    def start(self, room_name: str, keywords: List[str], poll_interval: float = 5.0) -> Dict:
+        """Start monitoring a chat room for keywords."""
+        if self.is_running:
+            return {"success": False, "error": "Monitor already running"}
+
+        self._room_name = room_name
+        self._keywords = [kw.lower() for kw in keywords]
+        self._poll_interval = max(3.0, poll_interval)
+        self._stop_event.clear()
+        self._events.clear()
+        self._seen_hashes.clear()
+        self._running = True
+
+        # Load existing messages so they don't trigger events
+        self._load_initial_messages()
+
+        self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._thread.start()
+
+        return {
+            "success": True,
+            "message": f"Monitoring '{room_name}' for keywords: {keywords} (interval: {self._poll_interval}s)",
+        }
+
+    def stop(self) -> Dict:
+        """Stop the monitoring thread."""
+        if not self.is_running:
+            return {"success": False, "error": "Monitor not running"}
+        self._stop_event.set()
+        self._thread.join(timeout=10)
+        self._running = False
+        return {"success": True, "message": "Monitor stopped"}
+
+    def get_events(self) -> List[Dict]:
+        """Return and clear all pending keyword-match events."""
+        events = list(self._events)
+        self._events.clear()
+        return events
+
+    def _msg_hash(self, msg: Dict) -> str:
+        """Create a hash to uniquely identify a message."""
+        key = f"{msg.get('sender', '')}|{msg.get('time', '')}|{msg.get('text', '')[:80]}"
+        return hashlib.md5(key.encode()).hexdigest()
+
+    def _load_initial_messages(self):
+        """Read current messages and store their hashes (baseline)."""
+        try:
+            result = read_chat_messages(self._room_name)
+            if result["success"]:
+                from . import parser
+                parsed = parser.parse_chat_text(result["raw_text"])
+                for msg in parsed["messages"]:
+                    self._seen_hashes.add(self._msg_hash(msg))
+                _log(f"Monitor baseline: {len(self._seen_hashes)} existing messages")
+        except Exception as e:
+            _log(f"Monitor baseline error: {e}")
+
+    def _monitor_loop(self):
+        """Background polling loop."""
+        _log(f"Monitor started: room='{self._room_name}', keywords={self._keywords}")
+        while not self._stop_event.is_set():
+            self._stop_event.wait(self._poll_interval)
+            if self._stop_event.is_set():
+                break
+            try:
+                self._check_for_new_messages()
+            except Exception as e:
+                _log(f"Monitor poll error: {e}")
+        _log("Monitor stopped")
+
+    def _check_for_new_messages(self):
+        """Poll for new messages and check for keyword matches."""
+        result = read_chat_messages(self._room_name)
+        if not result["success"]:
+            return
+
+        from . import parser
+        parsed = parser.parse_chat_text(result["raw_text"])
+        all_messages = parsed["messages"]
+
+        new_messages = []
+        for msg in all_messages:
+            h = self._msg_hash(msg)
+            if h not in self._seen_hashes:
+                self._seen_hashes.add(h)
+                new_messages.append(msg)
+
+        if not new_messages:
+            return
+
+        _log(f"Monitor: {len(new_messages)} new message(s)")
+
+        for msg in new_messages:
+            text_lower = msg.get("text", "").lower()
+            for kw in self._keywords:
+                if kw in text_lower:
+                    context_start = max(0, len(all_messages) - 10)
+                    self._events.append({
+                        "keyword": kw,
+                        "trigger_message": msg,
+                        "recent_context": all_messages[context_start:],
+                        "room_name": self._room_name,
+                    })
+                    _log(f"Monitor: keyword '{kw}' matched in message from {msg.get('sender')}")
+                    break  # One event per message
+
+
+# Module-level singleton
+_chat_monitor = ChatMonitor()
