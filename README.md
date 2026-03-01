@@ -10,6 +10,8 @@ Claude Desktop, Claude Code 등 MCP 클라이언트에서 카카오톡 메시지
 
 ## 주요 기능
 
+### 기본 도구
+
 | 도구 | 설명 |
 |------|------|
 | `kakao_health_check` | 카카오톡 PC 실행 상태 확인 |
@@ -20,6 +22,11 @@ Claude Desktop, Claude Code 등 MCP 클라이언트에서 카카오톡 메시지
 | `kakao_read_messages` | 채팅방 메시지 읽기 |
 | `kakao_extract_links` | 채팅방에서 공유된 URL 추출 |
 | `kakao_download_images` | 카카오톡 캐시에서 최근 이미지 다운로드 |
+
+### 모니터링 도구
+
+| 도구 | 설명 |
+|------|------|
 | `kakao_start_monitor` | 채팅방 키워드 모니터링 시작 |
 | `kakao_stop_monitor` | 모니터링 중지 |
 | `kakao_get_monitor_events` | 감지된 키워드 이벤트 조회 |
@@ -147,12 +154,30 @@ Claude에게 자연어로 요청하면 됩니다:
 - **이미지 다운로드**: 카카오톡 로컬 캐시에서 가져오며, 채팅방별 구분 없이 최근 캐시된 이미지가 다운로드됩니다.
 - **모니터링 기능**: `kakao_start_monitor`는 백그라운드에서 채팅방을 주기적으로 폴링합니다. 폴링 시마다 카카오톡 창이 잠시 최전면으로 올라오며, 최소 폴링 간격은 3초입니다.
 
+## 로드맵
+
+### v0.2.0 — 서버 사이드 자동 응답 (예정)
+
+클라이언트 폴링 방식의 토큰 비효율 문제를 해결하기 위해, MCP 서버 내부에서 채팅 감지 + AI 답장 생성 + 전송을 처리하는 기능을 추가할 예정입니다.
+
+| 도구 | 설명 |
+|------|------|
+| `kakao_start_auto_reply` | AI 자동 응답 모니터링 시작 (서버 사이드) |
+| `kakao_stop_auto_reply` | 자동 응답 중지 |
+| `kakao_get_auto_reply_log` | 자동 응답 이력 조회 |
+
+**핵심 개선:**
+- 새 메시지 감지는 서버 내부 hash 비교로 처리 (토큰 0)
+- AI 답장이 필요할 때만 Claude API를 최소 컨텍스트(최근 10개 메시지)로 호출
+- 클라이언트 폴링 대비 **토큰 ~99% 절감**
+
 ## 프로젝트 구조
 
 ```
 kakaotalk-mcp/
 ├── pyproject.toml
 ├── README.md
+├── CHANGELOG.md
 ├── LICENSE
 ├── requirements.txt
 ├── src/
