@@ -148,6 +148,21 @@ def bring_window_to_front(hwnd: int):
 _user32 = ctypes.windll.user32
 
 
+def _press_key(vk: int, shift: bool = False):
+    """Press and release a single key via keybd_event, optionally with Shift."""
+    VK_SHIFT = 0x10
+    if shift:
+        _user32.keybd_event(VK_SHIFT, 0, 0, 0)
+        time.sleep(0.01)
+    _user32.keybd_event(vk, 0, 0, 0)
+    time.sleep(0.01)
+    _user32.keybd_event(vk, 0, config.KEYEVENTF_KEYUP, 0)
+    if shift:
+        time.sleep(0.01)
+        _user32.keybd_event(VK_SHIFT, 0, config.KEYEVENTF_KEYUP, 0)
+    time.sleep(0.02)
+
+
 def _send_ctrl_key_combo(vk_key: int):
     """Send Ctrl+<key> combo using keybd_event (requires foreground focus)."""
     _user32.keybd_event(config.VK_CONTROL, 0, 0, 0)
@@ -577,4 +592,173 @@ def download_recent_images(
     return {
         "message": f"Downloaded {len(copied)} image(s) to {output_dir}",
         "images": copied,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Korean 2벌식 keyboard mapping (for @mention input)
+# ---------------------------------------------------------------------------
+
+# Map jamo → (VK code, needs_shift)
+_KOREAN_KEY_MAP = {
+    # Consonants (초성/종성)
+    'ㅂ': (0x51, False), 'ㅈ': (0x57, False), 'ㄷ': (0x45, False),
+    'ㄱ': (0x52, False), 'ㅅ': (0x54, False), 'ㅛ': (0x59, False),
+    'ㅕ': (0x55, False), 'ㅑ': (0x49, False), 'ㅐ': (0x4F, False),
+    'ㅔ': (0x50, False), 'ㅁ': (0x41, False), 'ㄴ': (0x53, False),
+    'ㅇ': (0x44, False), 'ㄹ': (0x46, False), 'ㅎ': (0x47, False),
+    'ㅗ': (0x48, False), 'ㅓ': (0x4A, False), 'ㅏ': (0x4B, False),
+    'ㅣ': (0x4C, False), 'ㅋ': (0x5A, False), 'ㅌ': (0x58, False),
+    'ㅊ': (0x43, False), 'ㅍ': (0x56, False), 'ㅠ': (0x42, False),
+    'ㅜ': (0x4E, False), 'ㅡ': (0x4D, False),
+    # Shift consonants (쌍자음)
+    'ㅆ': (0x54, True), 'ㄲ': (0x52, True), 'ㄸ': (0x45, True),
+    'ㅃ': (0x51, True), 'ㅉ': (0x57, True),
+    # Shift vowels
+    'ㅒ': (0x4F, True), 'ㅖ': (0x50, True),
+}
+
+_INITIALS = list('ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ')
+_MEDIALS = list('ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ')
+_FINALS = [''] + list('ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ')
+
+_COMPOUND_MEDIALS = {
+    'ㅘ': ['ㅗ', 'ㅏ'], 'ㅙ': ['ㅗ', 'ㅐ'], 'ㅚ': ['ㅗ', 'ㅣ'],
+    'ㅝ': ['ㅜ', 'ㅓ'], 'ㅞ': ['ㅜ', 'ㅔ'], 'ㅟ': ['ㅜ', 'ㅣ'],
+    'ㅢ': ['ㅡ', 'ㅣ'],
+}
+
+_COMPOUND_FINALS = {
+    'ㄳ': ['ㄱ', 'ㅅ'], 'ㄵ': ['ㄴ', 'ㅈ'], 'ㄶ': ['ㄴ', 'ㅎ'],
+    'ㄺ': ['ㄹ', 'ㄱ'], 'ㄻ': ['ㄹ', 'ㅁ'], 'ㄼ': ['ㄹ', 'ㅂ'],
+    'ㄽ': ['ㄹ', 'ㅅ'], 'ㄾ': ['ㄹ', 'ㅌ'], 'ㄿ': ['ㄹ', 'ㅍ'],
+    'ㅀ': ['ㄹ', 'ㅎ'], 'ㅄ': ['ㅂ', 'ㅅ'],
+}
+
+
+def _decompose_korean(text: str) -> List[tuple]:
+    """Decompose Korean text into a sequence of (VK_code, shift) keypresses.
+
+    Handles Hangul syllables (decomposed into jamo via 2벌식 mapping),
+    spaces, and skips non-Hangul characters.
+    """
+    keys: List[tuple] = []
+    for ch in text:
+        if ch == ' ':
+            keys.append((0x20, False))  # VK_SPACE
+            continue
+
+        code = ord(ch) - 0xAC00
+        if code < 0 or code > 11171:
+            # Non-Hangul character — skip
+            continue
+
+        initial = code // (21 * 28)
+        medial = (code % (21 * 28)) // 28
+        final = code % 28
+
+        # Initial consonant
+        ini = _INITIALS[initial]
+        if ini in _KOREAN_KEY_MAP:
+            keys.append(_KOREAN_KEY_MAP[ini])
+
+        # Medial vowel (may be compound)
+        med = _MEDIALS[medial]
+        if med in _COMPOUND_MEDIALS:
+            for m in _COMPOUND_MEDIALS[med]:
+                keys.append(_KOREAN_KEY_MAP[m])
+        elif med in _KOREAN_KEY_MAP:
+            keys.append(_KOREAN_KEY_MAP[med])
+
+        # Final consonant (may be compound or empty)
+        if final > 0:
+            fin = _FINALS[final]
+            if fin in _COMPOUND_FINALS:
+                for f in _COMPOUND_FINALS[fin]:
+                    keys.append(_KOREAN_KEY_MAP[f])
+            elif fin in _KOREAN_KEY_MAP:
+                keys.append(_KOREAN_KEY_MAP[fin])
+
+    return keys
+
+
+# ---------------------------------------------------------------------------
+# Mention message sending
+# ---------------------------------------------------------------------------
+
+def send_mention_message(room_name: str, mention_name: str, message: str) -> Dict:
+    """Send a message with @mention to a KakaoTalk chat room.
+
+    Uses keybd_event to type '@' (Shift+2) which activates the mention popup,
+    then types the name using Korean 2벌식 keyboard simulation, selects the
+    mention with Enter, and pastes the message text via clipboard.
+
+    NOTE: This briefly brings the chat window to the foreground.
+
+    Args:
+        room_name: Exact title of the chat room window.
+        mention_name: Display name of the person to mention.
+        message: Text message to send after the mention.
+
+    Returns:
+        Dict with success (bool) and message or error.
+    """
+    hwnd = find_chat_window(room_name)
+    if hwnd is None:
+        return {"success": False, "error": f"Chat window '{room_name}' not found"}
+
+    edit_hwnd = find_child_window_recursive(hwnd, config.KAKAO_EDIT_CLASS)
+    if edit_hwnd is None:
+        return {"success": False, "error": f"Edit control not found in '{room_name}'"}
+
+    # Clear the edit control
+    EM_SETSEL = 0x00B1
+    WM_CLEAR = 0x0303
+    win32api.SendMessage(edit_hwnd, EM_SETSEL, 0, -1)
+    win32api.SendMessage(edit_hwnd, WM_CLEAR, 0, 0)
+
+    # Bring window to foreground and click on edit control for focus
+    bring_window_to_front(hwnd)
+    time.sleep(0.3)
+    try:
+        rect = win32gui.GetWindowRect(edit_hwnd)
+        cx = (rect[0] + rect[2]) // 2
+        cy = (rect[1] + rect[3]) // 2
+        _user32.SetCursorPos(cx, cy)
+        _user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+        _user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+        time.sleep(0.2)
+    except Exception:
+        pass
+
+    # Type '@' using Shift+2 (keybd_event required to activate mention popup)
+    _press_key(0x32, shift=True)
+    time.sleep(0.8)
+
+    # Type mention name using Korean 2벌식 keyboard simulation
+    keys = _decompose_korean(mention_name)
+    for vk, shift in keys:
+        _press_key(vk, shift=shift)
+    time.sleep(1.0)
+
+    # Press Enter to select the mention from the popup
+    _press_key(config.VK_RETURN)
+    time.sleep(0.5)
+
+    # Paste message text via clipboard (space prefix to separate from mention)
+    win32clipboard.OpenClipboard()
+    win32clipboard.EmptyClipboard()
+    win32clipboard.SetClipboardText(' ' + message, win32clipboard.CF_UNICODETEXT)
+    win32clipboard.CloseClipboard()
+    time.sleep(0.05)
+    _send_ctrl_key_combo(0x56)  # Ctrl+V
+    time.sleep(0.3)
+
+    # Press Enter to send the message
+    _press_key(config.VK_RETURN)
+    time.sleep(0.5)
+
+    return {
+        "success": True,
+        "message": f"Mention message sent to @{mention_name} in '{room_name}'",
     }

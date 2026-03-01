@@ -16,6 +16,7 @@ Claude Desktop, Claude Code 등 MCP 클라이언트에서 카카오톡 메시지
 | `kakao_list_open_rooms` | 열려있는 채팅방 목록 조회 |
 | `kakao_open_room` | 채팅방 검색 및 열기 |
 | `kakao_send_message` | 채팅방에 메시지 전송 |
+| `kakao_send_mention` | @멘션과 함께 메시지 전송 |
 | `kakao_read_messages` | 채팅방 메시지 읽기 |
 | `kakao_extract_links` | 채팅방에서 공유된 URL 추출 |
 | `kakao_download_images` | 카카오톡 캐시에서 최근 이미지 다운로드 |
@@ -126,6 +127,7 @@ Claude에게 자연어로 요청하면 됩니다:
 - "열린 채팅방 목록 보여줘"
 - "홍길동 채팅방 열어줘"
 - "홍길동에게 '회의 10분 후에 시작합니다' 보내줘"
+- "홍길동에게 @멘션으로 '확인 부탁드립니다' 보내줘"
 - "홍길동 채팅방 최근 대화 읽어줘"
 - "홍길동 채팅방에서 공유된 링크 추출해줘"
 - "최근 카카오톡 이미지 다운로드해줘"
@@ -133,7 +135,8 @@ Claude에게 자연어로 요청하면 됩니다:
 ## 제한사항 및 주의사항
 
 - **Windows 전용**: Win32 API를 사용하므로 macOS/Linux에서는 동작하지 않습니다.
-- **포그라운드 필요**: 메시지 읽기(`kakao_read_messages`)와 채팅방 열기(`kakao_open_room`) 시 카카오톡 창이 잠시 최전면으로 올라옵니다.
+- **포그라운드 필요**: 메시지 읽기(`kakao_read_messages`), 채팅방 열기(`kakao_open_room`), 멘션 전송(`kakao_send_mention`) 시 카카오톡 창이 잠시 최전면으로 올라옵니다.
+- **멘션(@) 기능**: `kakao_send_mention`은 키보드 시뮬레이션으로 @멘션 팝업을 활성화합니다. 한글 2벌식 자판 입력을 사용하므로 시스템 키보드 레이아웃이 한글이어야 합니다.
 - **클립보드 사용**: 메시지 읽기/전송 시 시스템 클립보드를 사용합니다. 작업 중 클립보드 내용이 변경될 수 있습니다.
 - **채팅방 이름 정확히 입력**: `kakao_send_message`, `kakao_read_messages`는 채팅방 창 제목이 정확히 일치해야 합니다. 먼저 `kakao_list_open_rooms`로 정확한 이름을 확인하세요.
 - **이미지 다운로드**: 카카오톡 로컬 캐시에서 가져오며, 채팅방별 구분 없이 최근 캐시된 이미지가 다운로드됩니다.
@@ -150,7 +153,7 @@ kakaotalk-mcp/
 │   └── kakao_mcp/
 │       ├── __init__.py
 │       ├── __main__.py      # python -m kakao_mcp 지원
-│       ├── server.py        # MCP 서버 + 7개 도구 정의
+│       ├── server.py        # MCP 서버 + 8개 도구 정의
 │       ├── controller.py    # Win32 API 래퍼
 │       ├── parser.py        # 클립보드 텍스트 파싱
 │       └── config.py        # 상수 및 설정

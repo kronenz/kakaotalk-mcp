@@ -143,6 +143,31 @@ def kakao_extract_links(room_name: str) -> Dict:
 
 
 @app.tool()
+def kakao_send_mention(room_name: str, mention_name: str, message: str) -> Dict:
+    """Send a message with @mention to a KakaoTalk chat room.
+    Types '@' to activate the mention popup, selects the target user,
+    then sends the message. The chat room window must already be open.
+    NOTE: This briefly brings the chat window to the foreground.
+
+    Args:
+        room_name: Exact title of the chat room window.
+        mention_name: Display name of the person to mention (e.g. '홍길동').
+        message: The text message to send after the mention.
+    """
+    try:
+        if not mention_name.strip():
+            return {"error": "Mention name cannot be empty"}
+        if not message.strip():
+            return {"error": "Message cannot be empty"}
+        result = controller.send_mention_message(room_name, mention_name, message)
+        if result["success"]:
+            return {"message": result["message"]}
+        return {"error": result["error"]}
+    except Exception as e:
+        return {"error": f"Failed to send mention message: {e}"}
+
+
+@app.tool()
 def kakao_download_images(
     room_name: str,
     output_dir: Optional[str] = None,
