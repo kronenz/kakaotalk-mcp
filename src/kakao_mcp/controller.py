@@ -5,6 +5,7 @@ import time
 import ctypes
 import shutil
 import hashlib
+import subprocess
 import threading
 from collections import deque
 from typing import Optional, List, Dict
@@ -224,7 +225,7 @@ def send_message_to_room(room_name: str, text: str) -> Dict:
 
     # Bring window to foreground and focus the edit control
     bring_window_to_front(hwnd)
-    time.sleep(0.2)
+    time.sleep(config.WINDOW_ACTIVATE_WAIT_SEC)
 
     # Click on the edit control to ensure focus
     try:
@@ -234,7 +235,7 @@ def send_message_to_room(room_name: str, text: str) -> Dict:
         _user32.SetCursorPos(cx, cy)
         _user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
         _user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
-        time.sleep(0.1)
+        time.sleep(config.EDIT_CLICK_WAIT_SEC)
     except Exception:
         pass
 
@@ -243,15 +244,235 @@ def send_message_to_room(room_name: str, text: str) -> Dict:
     win32clipboard.EmptyClipboard()
     win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
     win32clipboard.CloseClipboard()
-    time.sleep(0.05)
+    time.sleep(config.CLIPBOARD_PASTE_WAIT_SEC)
     _send_ctrl_key_combo(0x56)  # Ctrl+V
-    time.sleep(0.1)
+    time.sleep(config.AFTER_PASTE_WAIT_SEC)
 
     # Press Enter using keybd_event (not WM_KEYDOWN — WM_KEYDOWN inserts newline in RICHEDIT)
     _user32.keybd_event(config.VK_RETURN, 0, 0, 0)
     _user32.keybd_event(config.VK_RETURN, 0, config.KEYEVENTF_KEYUP, 0)
 
     return {"success": True, "message": f"Message sent to '{room_name}'"}
+
+
+# ---------------------------------------------------------------------------
+# Bulk message sending
+# ---------------------------------------------------------------------------
+
+def send_bulk_messages(room_names: List[str], message: str, interval_sec: float = 0.5) -> Dict:
+    """Send the same message to multiple chat rooms sequentially.
+
+    Opens each room (if not already open) and sends the message.
+    Maintains a safe interval between rooms to avoid issues.
+
+    Args:
+        room_names: List of chat room names to send to.
+        message: The text message to send.
+        interval_sec: Seconds to wait between rooms (default 0.5, min 0.3).
+
+    Returns:
+        Dict with overall result and per-room details.
+    """
+    if not room_names:
+        return {"success": False, "error": "No room names provided"}
+    if not message.strip():
+        return {"success": False, "error": "Message cannot be empty"}
+
+    interval_sec = max(0.3, interval_sec)
+    results = []
+
+    for i, room_name in enumerate(room_names):
+        # Check if window is already open
+        hwnd = find_chat_window(room_name)
+        actual_room_name = room_name
+
+        if hwnd is None:
+            # Need to search and open
+            open_result = search_and_open_room(room_name)
+            if not open_result["success"]:
+                results.append({
+                    "room": room_name,
+                    "success": False,
+                    "detail": open_result["error"],
+                })
+                continue
+            # Extract actual room name from open result message
+            actual_room_name = open_result.get("message", "").split("'")[1] if "'" in open_result.get("message", "") else room_name
+            hwnd = open_result.get("hwnd")
+
+        # Send message
+        send_result = send_message_to_room(actual_room_name, message)
+        results.append({
+            "room": actual_room_name,
+            "success": send_result["success"],
+            "detail": send_result.get("message") or send_result.get("error"),
+        })
+
+        # Wait between rooms (skip after last)
+        if i < len(room_names) - 1:
+            time.sleep(interval_sec)
+
+    sent_count = sum(1 for r in results if r["success"])
+    return {
+        "success": sent_count > 0,
+        "message": f"Sent to {sent_count}/{len(room_names)} room(s)",
+        "results": results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Image sending
+# ---------------------------------------------------------------------------
+
+def _copy_image_to_clipboard(file_path: str):
+    """Copy an image file to clipboard as bitmap data (CF_DIB).
+
+    Converts the image to BMP via PowerShell/.NET, then sets CF_DIB
+    directly from Python so that:
+      1. The format matches what screenshot capture tools produce.
+      2. The Python process owns the clipboard and stays alive,
+         so no OleFlushClipboard() is needed.
+      3. Windows auto-synthesizes CF_BITMAP and CF_DIBV5 from CF_DIB.
+    """
+    abs_path = os.path.abspath(file_path)
+    if not os.path.isfile(abs_path):
+        raise FileNotFoundError(f"File not found: {abs_path}")
+
+    # Convert image to BMP byte stream using PowerShell/.NET
+    ps_path = abs_path.replace("'", "''")
+    ps_script = (
+        "Add-Type -AssemblyName System.Drawing;"
+        f"$img = [System.Drawing.Image]::FromFile('{ps_path}');"
+        "$ms = New-Object System.IO.MemoryStream;"
+        "$img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Bmp);"
+        "$img.Dispose();"
+        "$bytes = $ms.ToArray();"
+        "$ms.Dispose();"
+        "[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_script],
+        capture_output=True, timeout=15,
+    )
+    if result.returncode != 0:
+        raise OSError(
+            f"Failed to convert image to BMP: {result.stderr.decode().strip()}"
+        )
+
+    bmp_data = result.stdout
+    if len(bmp_data) < 54:  # 14 (file header) + 40 (info header) minimum
+        raise OSError("Image conversion produced invalid BMP data")
+
+    # CF_DIB = BMP data minus the 14-byte BITMAPFILEHEADER
+    dib_data = bmp_data[14:]
+
+    win32clipboard.OpenClipboard()
+    try:
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardData(win32con.CF_DIB, dib_data)
+    finally:
+        win32clipboard.CloseClipboard()
+
+
+def send_image_to_room(room_name: str, image_path: str) -> Dict:
+    """Send an image file to a KakaoTalk chat room.
+
+    Copies the image to clipboard as bitmap data (CF_DIB), pastes via
+    Ctrl+V into the chat window, and confirms the send dialog.
+    NOTE: This briefly brings the chat window to the foreground.
+    """
+    abs_path = os.path.abspath(image_path)
+    if not os.path.isfile(abs_path):
+        return {"success": False, "error": f"Image file not found: {abs_path}"}
+
+    ext = os.path.splitext(abs_path)[1].lower()
+    if ext not in config.SUPPORTED_IMAGE_EXTENSIONS:
+        return {
+            "success": False,
+            "error": f"Unsupported image format '{ext}'. Supported: {', '.join(sorted(config.SUPPORTED_IMAGE_EXTENSIONS))}",
+        }
+
+    hwnd = find_chat_window(room_name)
+    if hwnd is None:
+        return {"success": False, "error": f"Chat window '{room_name}' not found"}
+
+    edit_hwnd = find_child_window_recursive(hwnd, config.KAKAO_EDIT_CLASS)
+    if edit_hwnd is None:
+        return {"success": False, "error": f"Edit control not found in '{room_name}'"}
+
+    # Copy image to clipboard as bitmap (CF_DIB) BEFORE bringing window
+    # to front — clipboard operations don't need foreground focus.
+    try:
+        _copy_image_to_clipboard(abs_path)
+    except Exception as e:
+        return {"success": False, "error": f"Failed to copy image to clipboard: {e}"}
+
+    # Bring KakaoTalk to front
+    bring_window_to_front(hwnd)
+    time.sleep(config.IMAGE_FOCUS_WAIT_SEC)
+
+    # Set keyboard focus to the RICHEDIT edit control using SetFocus.
+    # We use AttachThreadInput so that SetFocus works cross-process.
+    # Mouse click is avoided because it can accidentally hit images
+    # displayed in the chat list area above the edit control.
+    kernel32 = ctypes.windll.kernel32
+    my_tid = kernel32.GetCurrentThreadId()
+    target_tid = _user32.GetWindowThreadProcessId(hwnd, None)
+    _user32.AttachThreadInput(my_tid, target_tid, True)
+    _user32.SetFocus(edit_hwnd)
+    _user32.AttachThreadInput(my_tid, target_tid, False)
+    time.sleep(config.IMAGE_SET_FOCUS_WAIT_SEC)
+
+    # Paste (Ctrl+V) — triggers KakaoTalk's image send confirmation dialog
+    _send_ctrl_key_combo(0x56)  # Ctrl+V
+
+    # Wait for the confirmation dialog to appear (it's a separate window).
+    # Poll until foreground changes from the chat window or timeout.
+    dialog_hwnd = None
+    for _ in range(40):  # up to ~6 seconds
+        time.sleep(config.IMAGE_DIALOG_POLL_INTERVAL_SEC)
+        fg = _user32.GetForegroundWindow()
+        if fg != hwnd and fg != 0:
+            dialog_hwnd = fg
+            break
+
+    if dialog_hwnd is None:
+        _log("Image send dialog did not appear")
+        return {"success": False, "error": "Image send confirmation dialog did not appear"}
+
+    # The dialog is already the foreground window.  Give it time to fully
+    # render, then press Enter to confirm.
+    time.sleep(config.IMAGE_CONFIRM_WAIT_SEC)
+    _user32.keybd_event(config.VK_RETURN, 0, 0, 0)
+    time.sleep(0.05)
+    _user32.keybd_event(config.VK_RETURN, 0, config.KEYEVENTF_KEYUP, 0)
+    time.sleep(config.IMAGE_AFTER_CONFIRM_WAIT_SEC)
+
+    return {"success": True, "message": f"Image sent to '{room_name}': {os.path.basename(abs_path)}"}
+
+
+def send_images_to_room(room_name: str, image_paths: List[str]) -> Dict:
+    """Send multiple image files to a KakaoTalk chat room, one at a time."""
+    if not image_paths:
+        return {"success": False, "error": "No image paths provided"}
+
+    results = []
+    for i, path in enumerate(image_paths):
+        result = send_image_to_room(room_name, path)
+        results.append({
+            "path": path,
+            "success": result["success"],
+            "detail": result.get("message") or result.get("error"),
+        })
+        if i < len(image_paths) - 1 and result["success"]:
+            time.sleep(config.IMAGE_BETWEEN_SEND_WAIT_SEC)
+
+    sent_count = sum(1 for r in results if r["success"])
+    return {
+        "success": sent_count > 0,
+        "message": f"Sent {sent_count}/{len(image_paths)} image(s) to '{room_name}'",
+        "results": results,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +501,7 @@ def read_chat_messages(room_name: str) -> Dict:
 
     # Bring the chat window to foreground — required for keybd_event
     bring_window_to_front(hwnd)
-    time.sleep(0.2)
+    time.sleep(config.WINDOW_ACTIVATE_WAIT_SEC)
 
     # Click on the list control to ensure it has focus
     try:
@@ -290,7 +511,7 @@ def read_chat_messages(room_name: str) -> Dict:
         _user32.SetCursorPos(cx, cy)
         _user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
         _user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
-        time.sleep(0.1)
+        time.sleep(config.EDIT_CLICK_WAIT_SEC)
     except Exception:
         pass
 
@@ -376,7 +597,7 @@ def _activate_search_and_get_edit(main_hwnd: int) -> Optional[int]:
 
     # Press Ctrl+F to activate search
     _send_ctrl_key_combo(0x46)  # 0x46 = 'F'
-    time.sleep(0.5)
+    time.sleep(config.SEARCH_ACTIVATE_WAIT_SEC)
 
     # Find the Edit control — should now be visible and focused
     edit_hwnd = find_child_window_recursive(chat_list_view, "Edit")
@@ -391,7 +612,7 @@ def _activate_search_and_get_edit(main_hwnd: int) -> Optional[int]:
 def _ensure_foreground(hwnd: int) -> bool:
     """Ensure a window is in the foreground. Returns True if successful."""
     bring_window_to_front(hwnd)
-    time.sleep(0.2)
+    time.sleep(config.WINDOW_ACTIVATE_WAIT_SEC)
     fg = _user32.GetForegroundWindow()
     return fg == hwnd
 
@@ -425,25 +646,21 @@ def search_and_open_room(room_name: str) -> Dict:
     WM_CLEAR = 0x0303
     win32api.SendMessage(edit_hwnd, EM_SETSEL, 0, -1)  # Select all
     win32api.SendMessage(edit_hwnd, WM_CLEAR, 0, 0)     # Delete selected
-    time.sleep(0.1)
+    time.sleep(config.EDIT_CLICK_WAIT_SEC)
 
     # Type search text character by character using WM_CHAR
     # This goes directly to the Edit control — no focus or clipboard needed
     for ch in room_name:
         win32api.SendMessage(edit_hwnd, config.WM_CHAR, ord(ch), 0)
-        time.sleep(0.02)
+        time.sleep(config.SEARCH_CHAR_INTERVAL_SEC)
     _log(f"Typed '{room_name}' into Edit via WM_CHAR")
-    time.sleep(1.5)  # Wait for search results to populate
+    time.sleep(config.SEARCH_RESULTS_WAIT_SEC)  # Wait for search results to populate
 
-    # Navigate to the first search result with Down arrow, then Enter to open
-    _log("Pressing Down arrow to select first search result, then Enter")
-    VK_DOWN = 0x28
-    _user32.keybd_event(VK_DOWN, 0, 0, 0)
-    _user32.keybd_event(VK_DOWN, 0, config.KEYEVENTF_KEYUP, 0)
-    time.sleep(0.3)
+    # Press Enter to open the first search result (already selected by default)
+    _log("Pressing Enter to open first search result")
     _user32.keybd_event(config.VK_RETURN, 0, 0, 0)
     _user32.keybd_event(config.VK_RETURN, 0, config.KEYEVENTF_KEYUP, 0)
-    time.sleep(1.0)
+    time.sleep(config.SEARCH_OPEN_WAIT_SEC)
 
     # Do NOT press Escape here — it would close the newly opened chat window
 
@@ -722,7 +939,7 @@ def send_mention_message(room_name: str, mention_name: str, message: str) -> Dic
 
     # Bring window to foreground and click on edit control for focus
     bring_window_to_front(hwnd)
-    time.sleep(0.3)
+    time.sleep(config.MENTION_FOCUS_WAIT_SEC)
     try:
         rect = win32gui.GetWindowRect(edit_hwnd)
         cx = (rect[0] + rect[2]) // 2
@@ -730,36 +947,36 @@ def send_mention_message(room_name: str, mention_name: str, message: str) -> Dic
         _user32.SetCursorPos(cx, cy)
         _user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
         _user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
-        time.sleep(0.2)
+        time.sleep(config.MENTION_CLICK_WAIT_SEC)
     except Exception:
         pass
 
     # Type '@' using Shift+2 (keybd_event required to activate mention popup)
     _press_key(0x32, shift=True)
-    time.sleep(0.8)
+    time.sleep(config.MENTION_AT_WAIT_SEC)
 
     # Type mention name using Korean 2벌식 keyboard simulation
     keys = _decompose_korean(mention_name)
     for vk, shift in keys:
         _press_key(vk, shift=shift)
-    time.sleep(1.0)
+    time.sleep(config.MENTION_NAME_WAIT_SEC)
 
     # Press Enter to select the mention from the popup
     _press_key(config.VK_RETURN)
-    time.sleep(0.5)
+    time.sleep(config.MENTION_SELECT_WAIT_SEC)
 
     # Paste message text via clipboard (space prefix to separate from mention)
     win32clipboard.OpenClipboard()
     win32clipboard.EmptyClipboard()
     win32clipboard.SetClipboardText(' ' + message, win32clipboard.CF_UNICODETEXT)
     win32clipboard.CloseClipboard()
-    time.sleep(0.05)
+    time.sleep(config.CLIPBOARD_PASTE_WAIT_SEC)
     _send_ctrl_key_combo(0x56)  # Ctrl+V
-    time.sleep(0.3)
+    time.sleep(config.MENTION_PASTE_WAIT_SEC)
 
     # Press Enter to send the message
     _press_key(config.VK_RETURN)
-    time.sleep(0.5)
+    time.sleep(config.MENTION_SEND_WAIT_SEC)
 
     return {
         "success": True,

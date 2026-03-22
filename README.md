@@ -18,9 +18,11 @@ Claude Desktop, Claude Code 등 MCP 클라이언트에서 카카오톡 메시지
 | `kakao_list_open_rooms` | 열려있는 채팅방 목록 조회 |
 | `kakao_open_room` | 채팅방 검색 및 열기 |
 | `kakao_send_message` | 채팅방에 메시지 전송 |
+| `kakao_send_bulk` | 여러 채팅방에 동일 메시지 일괄 전송 |
 | `kakao_send_mention` | @멘션과 함께 메시지 전송 |
 | `kakao_read_messages` | 채팅방 메시지 읽기 |
 | `kakao_extract_links` | 채팅방에서 공유된 URL 추출 |
+| `kakao_send_image` | 채팅방에 이미지 파일 전송 |
 | `kakao_download_images` | 카카오톡 캐시에서 최근 이미지 다운로드 |
 
 ### 모니터링 도구
@@ -140,7 +142,9 @@ Claude에게 자연어로 요청하면 됩니다:
 - "홍길동에게 @멘션으로 '확인 부탁드립니다' 보내줘"
 - "홍길동 채팅방 최근 대화 읽어줘"
 - "홍길동 채팅방에서 공유된 링크 추출해줘"
+- "이 이미지를 홍길동에게 보내줘: C:\Users\사용자\Pictures\photo.jpg"
 - "최근 카카오톡 이미지 다운로드해줘"
+- "홍길동, 김철수, 이영희에게 '내일 회의 참석 부탁드립니다' 보내줘"
 - "공학자들 채팅방에서 '회의', '점심' 키워드를 모니터링하고 감지되면 답장해줘"
 - "모니터링 중지해줘"
 
@@ -151,6 +155,7 @@ Claude에게 자연어로 요청하면 됩니다:
 - **멘션(@) 기능**: `kakao_send_mention`은 키보드 시뮬레이션으로 @멘션 팝업을 활성화합니다. 한글 2벌식 자판 입력을 사용하므로 시스템 키보드 레이아웃이 한글이어야 합니다.
 - **클립보드 사용**: 메시지 읽기/전송 시 시스템 클립보드를 사용합니다. 작업 중 클립보드 내용이 변경될 수 있습니다.
 - **채팅방 이름 정확히 입력**: `kakao_send_message`, `kakao_read_messages`는 채팅방 창 제목이 정확히 일치해야 합니다. 먼저 `kakao_list_open_rooms`로 정확한 이름을 확인하세요.
+- **이미지 전송**: `kakao_send_image`는 파일을 클립보드에 복사한 후 Ctrl+V로 붙여넣는 방식입니다. 전송 확인 다이얼로그가 자동으로 처리됩니다. JPG, PNG, GIF, BMP, WebP 형식을 지원합니다.
 - **이미지 다운로드**: 카카오톡 로컬 캐시에서 가져오며, 채팅방별 구분 없이 최근 캐시된 이미지가 다운로드됩니다.
 - **모니터링 기능**: `kakao_start_monitor`는 백그라운드에서 채팅방을 주기적으로 폴링합니다. 폴링 시마다 카카오톡 창이 잠시 최전면으로 올라오며, 최소 폴링 간격은 3초입니다.
 
@@ -184,7 +189,7 @@ kakaotalk-mcp/
 │   └── kakao_mcp/
 │       ├── __init__.py
 │       ├── __main__.py      # python -m kakao_mcp 지원
-│       ├── server.py        # MCP 서버 + 11개 도구 정의
+│       ├── server.py        # MCP 서버 + 13개 도구 정의
 │       ├── controller.py    # Win32 API 래퍼
 │       ├── parser.py        # 클립보드 텍스트 파싱
 │       └── config.py        # 상수 및 설정

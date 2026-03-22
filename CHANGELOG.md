@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.0] - 2026-03-22
+
+### Added
+- `kakao_send_bulk` — 여러 채팅방에 동일 메시지를 한 번에 전송하는 일괄 전송 도구
+  - `room_names` 리스트로 다수 채팅방 지정
+  - `interval_sec` 파라미터로 방 간 전송 간격 조절 (기본 0.5초, 최소 0.3초)
+  - 이미 열린 창은 재검색 없이 재활용하여 속도 향상
+  - 개별 전송 결과를 room별로 반환
+- `kakao_send_image` — 채팅방에 이미지 파일 전송 (CF_HDROP 클립보드 + Ctrl+V 방식)
+  - JPG, PNG, GIF, BMP, WebP 형식 지원
+  - 단일 또는 다수 이미지 순차 전송 지원
+  - 카카오톡 전송 확인 다이얼로그 자동 처리
+
+### Changed
+- **타이밍 최적화**: 모든 하드코딩된 `time.sleep()` 값을 `config.py` 상수로 중앙 관리화
+  - 채팅방 검색+열기: ~3.0초 → ~1.6초 (약 47% 단축)
+  - 메시지 전송: ~0.35초 → ~0.16초 (약 54% 단축)
+  - 3개 채팅방 전송 총합: ~10초 → ~5초 (약 50% 단축)
+- `config.py`에 카테고리별 타이밍 상수 추가 (Window, Search, Image, Mention)
+- `controller.py` 내 모든 `time.sleep()` 호출을 `config.상수`로 교체
+
 ## [0.1.0] - 2025-02-27
 
 ### Added
@@ -36,4 +59,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 채팅방 검색 시 기존 검색어 잔류 문제 (ESC로 초기화)
 - 메시지 전송 시 클립보드 충돌 방지 (`WM_SETTEXT` → 클립보드 `Ctrl+V` 방식)
 
+[0.2.0]: https://github.com/kronenz/kakaotalk-mcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kronenz/kakaotalk-mcp/releases/tag/v0.1.0

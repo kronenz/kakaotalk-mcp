@@ -93,6 +93,64 @@ def kakao_send_message(room_name: str, message: str) -> Dict:
 
 
 @app.tool()
+def kakao_send_bulk(room_names: list[str], message: str, interval_sec: float = 0.5) -> Dict:
+    """Send the same message to multiple KakaoTalk chat rooms at once.
+    Opens each room if not already open and sends the message sequentially.
+    Maintains a safe interval between rooms to ensure reliability.
+
+    Args:
+        room_names: List of chat room names or person names to send to.
+        message: The text message to send to all rooms.
+        interval_sec: Seconds to wait between rooms (default 0.5, minimum 0.3).
+    """
+    try:
+        if not room_names:
+            return {"error": "room_names cannot be empty"}
+        if not message.strip():
+            return {"error": "Message cannot be empty"}
+        result = controller.send_bulk_messages(room_names, message, interval_sec)
+        if result["success"]:
+            return {"message": result["message"], "results": result["results"]}
+        return {"error": result.get("message", "Failed to send bulk messages"), "results": result.get("results", [])}
+    except Exception as e:
+        return {"error": f"Failed to send bulk messages: {e}"}
+
+
+@app.tool()
+def kakao_send_image(room_name: str, image_paths: list[str]) -> Dict:
+    """Send image file(s) to a KakaoTalk chat room.
+    Copies the image to clipboard using file-drop format and pastes into the chat.
+    KakaoTalk shows a confirmation dialog which is automatically accepted.
+    The chat room window must already be open.
+    NOTE: This briefly brings the chat window to the foreground.
+
+    Args:
+        room_name: Exact title of the chat room window.
+        image_paths: List of absolute file paths to images (JPG, PNG, GIF, BMP, WebP).
+    """
+    try:
+        if not image_paths:
+            return {"error": "image_paths cannot be empty"}
+
+        for path in image_paths:
+            if not os.path.isfile(os.path.abspath(path)):
+                return {"error": f"Image file not found: {path}"}
+
+        if len(image_paths) == 1:
+            result = controller.send_image_to_room(room_name, image_paths[0])
+            if result["success"]:
+                return {"message": result["message"]}
+            return {"error": result["error"]}
+        else:
+            result = controller.send_images_to_room(room_name, image_paths)
+            if result["success"]:
+                return {"message": result["message"], "results": result["results"]}
+            return {"error": result.get("message", "Failed to send images"), "results": result.get("results", [])}
+    except Exception as e:
+        return {"error": f"Failed to send image: {e}"}
+
+
+@app.tool()
 def kakao_read_messages(room_name: str, max_messages: int = 50) -> Dict:
     """Read recent messages from a KakaoTalk chat room.
     Uses clipboard-based reading (Ctrl+A, Ctrl+C on the chat list).
