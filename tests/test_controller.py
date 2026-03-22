@@ -182,3 +182,90 @@ def test_get_user_hash_dir_no_users_dir(mock_isdir):
     mock_isdir.return_value = False
     result = controller.get_kakao_user_hash_dir()
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _copy_image_to_clipboard
+# ---------------------------------------------------------------------------
+
+@patch("kakao_mcp.controller.win32clipboard")
+@patch("kakao_mcp.controller.subprocess")
+@patch("os.path.isfile", return_value=True)
+@patch("os.path.abspath", return_value="C:\\test\\image.jpg")
+def test_copy_image_to_clipboard_success(mock_abs, mock_isfile, mock_subprocess,
+                                          mock_clipboard):
+    # Fake BMP data: 14-byte file header + 40-byte info header + pixel data
+    fake_bmp = b"BM" + b"\x00" * 12 + b"\x00" * 40 + b"\xff" * 100
+    mock_result = mock_subprocess.run.return_value
+    mock_result.returncode = 0
+    mock_result.stdout = fake_bmp
+    controller._copy_image_to_clipboard("C:\\test\\image.jpg")
+    mock_subprocess.run.assert_called_once()
+    call_args = mock_subprocess.run.call_args[0][0]
+    assert call_args[0] == "powershell"
+    mock_clipboard.OpenClipboard.assert_called_once()
+    mock_clipboard.EmptyClipboard.assert_called_once()
+    mock_clipboard.SetClipboardData.assert_called_once()
+
+
+@patch("os.path.isfile", return_value=False)
+@patch("os.path.abspath", return_value="C:\\nonexistent.jpg")
+def test_copy_image_to_clipboard_not_found(mock_abs, mock_isfile):
+    with pytest.raises(FileNotFoundError):
+        controller._copy_image_to_clipboard("C:\\nonexistent.jpg")
+
+
+# ---------------------------------------------------------------------------
+# send_image_to_room
+# ---------------------------------------------------------------------------
+
+@patch("kakao_mcp.controller._copy_image_to_clipboard")
+@patch("kakao_mcp.controller.win32gui")
+@patch("kakao_mcp.controller._user32")
+@patch("kakao_mcp.controller._send_ctrl_key_combo")
+@patch("kakao_mcp.controller.bring_window_to_front")
+@patch("kakao_mcp.controller.find_child_window_recursive")
+@patch("kakao_mcp.controller.find_chat_window")
+@patch("os.path.splitext", return_value=("C:\\test\\image", ".jpg"))
+@patch("os.path.isfile", return_value=True)
+@patch("os.path.abspath", return_value="C:\\test\\image.jpg")
+def test_send_image_success(mock_abs, mock_isfile, mock_split, mock_find,
+                            mock_find_child, mock_bring, mock_ctrl,
+                            mock_user32, mock_win32gui, mock_copy):
+    mock_find.return_value = 11111
+    mock_find_child.return_value = 22222
+    mock_win32gui.GetWindowRect.return_value = (100, 100, 200, 120)
+    # Simulate dialog appearing (foreground changes to a different window)
+    mock_user32.GetForegroundWindow.side_effect = [11111, 33333]
+    result = controller.send_image_to_room("TestRoom", "C:\\test\\image.jpg")
+    assert result["success"] is True
+    assert "sent" in result["message"].lower()
+    mock_copy.assert_called_once()
+    mock_bring.assert_called_once()
+
+
+@patch("os.path.isfile", return_value=False)
+@patch("os.path.abspath", return_value="C:\\nonexistent.jpg")
+def test_send_image_file_not_found(mock_abs, mock_isfile):
+    result = controller.send_image_to_room("TestRoom", "C:\\nonexistent.jpg")
+    assert result["success"] is False
+    assert "not found" in result["error"]
+
+
+@patch("os.path.splitext", return_value=("C:\\test\\doc", ".pdf"))
+@patch("os.path.isfile", return_value=True)
+@patch("os.path.abspath", return_value="C:\\test\\doc.pdf")
+def test_send_image_unsupported_format(mock_abs, mock_isfile, mock_split):
+    result = controller.send_image_to_room("TestRoom", "C:\\test\\doc.pdf")
+    assert result["success"] is False
+    assert "unsupported" in result["error"].lower()
+
+
+@patch("os.path.splitext", return_value=("C:\\test\\image", ".jpg"))
+@patch("os.path.isfile", return_value=True)
+@patch("os.path.abspath", return_value="C:\\test\\image.jpg")
+@patch("kakao_mcp.controller.find_chat_window", return_value=None)
+def test_send_image_room_not_found(mock_find, mock_abs, mock_isfile, mock_split):
+    result = controller.send_image_to_room("NoRoom", "C:\\test\\image.jpg")
+    assert result["success"] is False
+    assert "not found" in result["error"]

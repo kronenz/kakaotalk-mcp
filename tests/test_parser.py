@@ -107,3 +107,28 @@ def test_no_header():
     assert result["member_count"] is None
     assert len(result["messages"]) == 1
     assert result["messages"][0]["text"] == "안녕"
+
+
+def test_bare_date_separator():
+    """Clipboard from Ctrl+A copy has bare dates without dashes."""
+    text = "2026년 2월 28일 토요일\r\n[김철수] [오후 4:48] 테스트 메시지"
+    result = parse_chat_text(text)
+    assert len(result["dates"]) == 1
+    assert "2026년" in result["dates"][0]
+    assert "토요일" in result["dates"][0]
+    assert len(result["messages"]) == 1
+    assert result["messages"][0]["sender"] == "김철수"
+    assert result["messages"][0]["text"] == "테스트 메시지"
+
+
+def test_bare_date_not_appended_to_message():
+    """Bare date line should not be treated as continuation of previous message."""
+    text = (
+        "[김철수] [오전 10:30] 안녕\r\n"
+        "2026년 3월 1일 일요일\r\n"
+        "[이영희] [오전 9:00] 좋은 아침"
+    )
+    result = parse_chat_text(text)
+    assert len(result["messages"]) == 2
+    assert result["messages"][0]["text"] == "안녕"
+    assert result["messages"][1]["text"] == "좋은 아침"

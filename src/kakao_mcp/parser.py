@@ -8,9 +8,11 @@ MESSAGE_PATTERN = re.compile(
     r'^\[(.+?)\]\s*\[(오전|오후)\s*(\d{1,2}:\d{2})\]\s*(.*)',
 )
 
-# Date separator: --------------- 2025년 2월 27일 목요일 ---------------
+# Date separator:
+#   "--------------- 2025년 2월 27일 목요일 ---------------"  (with dashes, from full export)
+#   "2026년 2월 28일 토요일"  (bare date, from Ctrl+A clipboard copy)
 DATE_SEPARATOR_PATTERN = re.compile(
-    r'^-+\s*(\d{4}년\s*\d{1,2}월\s*\d{1,2}일\s*\S+요일)\s*-+$',
+    r'^-*\s*(\d{4}년\s*\d{1,2}월\s*\d{1,2}일\s*\S+요일)\s*-*$',
     re.MULTILINE,
 )
 
